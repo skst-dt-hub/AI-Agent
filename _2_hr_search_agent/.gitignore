@@ -1,0 +1,7 @@
+# 생성된 결과 파일
+result.json
+result_local.json
+result_scored.json
+
+# 설정 파일 (config.example.py 참고)
+config.py

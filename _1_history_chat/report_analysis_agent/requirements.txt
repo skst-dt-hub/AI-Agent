@@ -1,0 +1,6 @@
+streamlit
+strands-agents
+strands-agents-tools
+boto3
+openpyxl
+python-dotenv

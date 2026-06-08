@@ -1,0 +1,29 @@
+# Claude Code
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+
+# 보안
+.env
+_Setting/SuyeonKim_accessKeys.csv
+
+# 바이너리/아카이브
+*.msi
+*.zip
+
+# 로그
+*.log
+
+# 데이터/결과물
+data/
+output/
+*.xlsx
+*.xls
+
+# OS/임시파일
+~$*
+desktop.ini
+Thumbs.db
+.DS_Store
