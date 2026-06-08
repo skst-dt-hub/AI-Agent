@@ -8,10 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from history_tree import REGION, KNOWLEDGE_BASE_ID, result_text, search_knowledge_base
-
-
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+from history_tree import REGION, KNOWLEDGE_BASE_ID, MODEL_ID, result_text, search_knowledge_base
 
 SYSTEM_PROMPT = f"""당신은 내부 보고 문서를 기반으로 대화형 분석을 돕는 History Tree 챗봇입니다.
 

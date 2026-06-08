@@ -1,9 +1,16 @@
+import os
+from pathlib import Path
+
 import boto3
+from dotenv import load_dotenv
 from strands import Agent
 from strands.tools import tool
 
-KNOWLEDGE_BASE_ID = "PKHCULLVMP"
-REGION = "us-east-2"
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID", "")
+REGION = os.getenv("AWS_REGION", "us-east-2")
+MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 bedrock_agent_runtime = boto3.client("bedrock-agent-runtime", region_name=REGION)
 
@@ -46,7 +53,7 @@ def search_knowledge_base(keyword: str) -> str:
 
 # ── Agent 정의 ─────────────────────────────────────────────────────────────────
 search_agent = Agent(
-    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    model=MODEL_ID,
     system_prompt="""당신은 보고 문서 검색 전문가입니다.
 Knowledge Base에서 키워드 관련 항목을 검색하고,
 날짜, 현안 제목, 주요 내용을 추출하여 날짜 역순으로 정리해주세요.""",
@@ -55,7 +62,7 @@ Knowledge Base에서 키워드 관련 항목을 검색하고,
 )
 
 analyst_agent = Agent(
-    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    model=MODEL_ID,
     system_prompt="""당신은 보고 히스토리 분석 전문가입니다.
 검색된 항목들을 분석하여 각 항목을 다음으로 분류하세요:
 - 신규 등장: 처음 나타난 이슈
@@ -67,7 +74,7 @@ analyst_agent = Agent(
 )
 
 writer_agent = Agent(
-    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    model=MODEL_ID,
     system_prompt="""당신은 보고 History Tree 작성 전문가입니다.
 분석된 내용을 아래 형식으로 출력하세요:
 
