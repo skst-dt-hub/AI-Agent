@@ -28,4 +28,19 @@ desktop.ini
 Thumbs.db
 .DS_Store
 
-/workshop
+# Workshop local/generated files
+workshop/**/.bedrock_agentcore/
+workshop/**/data/
+workshop/**/__pycache__/
+workshop/**/*.py[cod]
+workshop/**/.pytest_cache/
+workshop/**/.mypy_cache/
+workshop/**/.ruff_cache/
+workshop/**/.venv/
+workshop/**/venv/
+workshop/**/.env
+workshop/**/.env.*
+!workshop/**/.env.example
+workshop/**/*.log
+workshop/**/.DS_Store
+workshop/**/*.md
