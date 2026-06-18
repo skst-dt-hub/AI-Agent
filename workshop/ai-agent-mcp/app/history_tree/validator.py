@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 import boto3
@@ -46,16 +47,61 @@ def validate_evidence(
     return accepted[:limit], diagnostics
 
 
+SIMILARITY_DEDUPE_THRESHOLD = 0.86
+
+
 def dedupe_chunks(chunks: list[RawChunk]) -> list[RawChunk]:
-    seen = set()
-    result = []
+    result: list[RawChunk] = []
     for chunk in chunks:
-        key = (chunk.source, " ".join(chunk.content.split())[:300])
-        if key in seen:
+        duplicate_index = find_duplicate_index(result, chunk)
+        if duplicate_index is not None:
+            if score_value(chunk) > score_value(result[duplicate_index]):
+                result[duplicate_index] = chunk
             continue
-        seen.add(key)
         result.append(chunk)
     return result
+
+
+def find_duplicate_index(existing_chunks: list[RawChunk], candidate: RawChunk) -> int | None:
+    candidate_source = normalize_source(candidate.source)
+    candidate_text = normalize_for_similarity(candidate.content)
+    if not candidate_text:
+        return None
+
+    for index, existing in enumerate(existing_chunks):
+        if normalize_source(existing.source) != candidate_source:
+            continue
+        existing_text = normalize_for_similarity(existing.content)
+        if chunk_similarity(existing_text, candidate_text) >= SIMILARITY_DEDUPE_THRESHOLD:
+            return index
+    return None
+
+
+def normalize_source(source: str) -> str:
+    return str(source or "").replace("\\", "/").strip().lower()
+
+
+def normalize_for_similarity(content: str) -> str:
+    text = re.sub(r"\s+", " ", str(content or "").lower()).strip()
+    text = re.sub(r"[\"'`~!@#$%^&*_=+<>{}\[\]\\|]", "", text)
+    return text[:5000]
+
+
+def chunk_similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    sequence_score = SequenceMatcher(None, left, right, autojunk=False).ratio()
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if left_tokens and right_tokens:
+        token_score = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    else:
+        token_score = 0.0
+    return max(sequence_score, token_score)
+
+
+def score_value(chunk: RawChunk) -> float:
+    return float(chunk.kb_score or 0.0)
 
 
 def judge_chunk(
