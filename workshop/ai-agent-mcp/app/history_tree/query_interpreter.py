@@ -18,9 +18,18 @@ Read the user's query and return strict JSON only.
 Goals:
 - Identify the user's intent.
 - Pick one primary keyword or topic.
-- Suggest high-precision aliases and search queries.
+- The internal reports are mostly Korean business documents. Prefer Korean
+  keywords, Korean synonyms, Korean abbreviations, and internal business terms.
+- Suggest high-precision aliases and search queries that would actually appear
+  in Korean reports.
+- English aliases are allowed only as secondary terms when they are standard
+  product/material names, chemical formulas, customer names, or common acronyms.
+- Do not translate a Korean keyword into English unless that English term is
+  likely to appear in the original documents.
 - Avoid short ambiguous aliases unless they are part of a longer compound term.
-- Prefer aliases that would likely appear in business reports.
+- Keep the primary_keyword in the same language as the user's query when
+  possible.
+- Put Korean search queries before English search queries.
 
 Schema:
 {
@@ -43,7 +52,8 @@ def interpret_query(query: str) -> SearchPlan:
     primary_keyword = str(parsed.get("primary_keyword") or query).strip()
     aliases = sanitize_terms(parsed.get("aliases") or [], primary_keyword)
     search_queries = sanitize_terms(parsed.get("search_queries") or [], primary_keyword)
-    search_queries = merge_terms([primary_keyword, *search_queries, *aliases])
+    aliases = prioritize_korean_terms(aliases)
+    search_queries = prioritize_korean_terms(merge_terms([primary_keyword, *search_queries, *aliases]))
 
     return SearchPlan(
         original_query=query,
@@ -69,6 +79,29 @@ def sanitize_terms(values: Any, primary_keyword: str, allow_short: bool = False)
         if term.lower() not in {item.lower() for item in result}:
             result.append(term)
     return result[:8]
+
+
+def prioritize_korean_terms(terms: list[str]) -> list[str]:
+    return sorted(
+        terms,
+        key=lambda term: (
+            0 if contains_korean(term) else 1,
+            0 if not is_ascii_only(term) else 1,
+            len(term),
+        ),
+    )
+
+
+def contains_korean(term: str) -> bool:
+    return bool(re.search(r"[가-힣]", term))
+
+
+def is_ascii_only(term: str) -> bool:
+    try:
+        term.encode("ascii")
+        return True
+    except UnicodeEncodeError:
+        return False
 
 
 def is_ambiguous_short_alias(term: str) -> bool:
