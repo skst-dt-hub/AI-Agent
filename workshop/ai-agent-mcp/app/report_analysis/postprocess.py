@@ -14,9 +14,7 @@ from .config import AWS_REGION, MODEL_ID
 from .models import InternalResult
 
 
-DEFAULT_KEYWORD_ALIASES: dict[str, list[str]] = {
-    "몰리브덴": ["몰리브덴", "molybdenum", "MoF6"],
-}
+DEFAULT_KEYWORD_ALIASES: dict[str, list[str]] = {}
 
 DEPARTMENT_COLORS = {
     "경영지원": "#3b82f6",
