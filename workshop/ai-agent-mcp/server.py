@@ -58,8 +58,9 @@ def history_tree_report(
     department, tags, summary, details, source, confidence, and relevance_score.
 
     This tool does not classify items as new/repeated/disappeared and does not
-    return a markdown History Tree. Do not use timeline_html unless the client
-    can safely render HTML.
+    return a markdown History Tree. Use output_format="debug" only for
+    troubleshooting; it includes the top rejected chunks and rejection reasons.
+    Do not use timeline_html unless the client can safely render HTML.
     """
     return run_history_tree(
         keyword=keyword,

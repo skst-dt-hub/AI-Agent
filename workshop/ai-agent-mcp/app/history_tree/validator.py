@@ -39,10 +39,23 @@ def validate_evidence(
         ),
         reverse=True,
     )
+    rejected = [
+        item
+        for item in validated
+        if item.validation.confidence not in {"High", "Medium"}
+    ]
+    rejected.sort(
+        key=lambda item: (
+            item.validation.relevance_score,
+            item.chunk.kb_score or 0.0,
+        ),
+        reverse=True,
+    )
     diagnostics = {
         "candidate_count": len(chunks),
         "deduped_count": len(unique_chunks),
         "filtered_out_count": len(unique_chunks) - len(accepted),
+        "rejected_top": [debug_chunk(item) for item in rejected[:10]],
     }
     return accepted[:limit], diagnostics
 
@@ -105,6 +118,43 @@ def has_long_contiguous_overlap(left: str, right: str) -> bool:
 
 def score_value(chunk: RawChunk) -> float:
     return float(chunk.kb_score or 0.0)
+
+
+def debug_chunk(item: ValidatedChunk) -> dict[str, Any]:
+    chunk = item.chunk
+    validation = item.validation
+    return {
+        "source": chunk.source.rsplit("/", 1)[-1] if chunk.source else "",
+        "source_uri": chunk.source,
+        "query": chunk.query,
+        "kb_score": chunk.kb_score,
+        "matched_terms": validation.matched_terms,
+        "text_confidence": validation.text_confidence,
+        "confidence": validation.confidence,
+        "relevance_score": validation.relevance_score,
+        "llm_relevance_score": validation.llm_relevance_score,
+        "llm_is_relevant": validation.llm_is_relevant,
+        "reason": validation.reason,
+        "excerpt": make_debug_excerpt(chunk.content, validation.matched_terms),
+    }
+
+
+def make_debug_excerpt(content: str, terms: list[str], max_len: int = 700) -> str:
+    text = re.sub(r"\s+", " ", str(content or "")).strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    positions = [
+        lowered.find(str(term).lower())
+        for term in terms
+        if term and lowered.find(str(term).lower()) >= 0
+    ]
+    if not positions:
+        return text[:max_len]
+    center = min(positions)
+    start = max(0, center - max_len // 2)
+    end = min(len(text), start + max_len)
+    return text[start:end]
 
 
 def judge_chunk(

@@ -54,8 +54,19 @@ def run_history_tree(
             }
             for chunk in raw_chunks
         ]
+    elif output_format == "debug":
+        payload["debug"] = {
+            "query_plan": plan.to_dict(),
+            "retrieved_count": len(raw_chunks),
+            "candidate_count": diagnostics.get("candidate_count", 0),
+            "deduped_count": diagnostics.get("deduped_count", 0),
+            "filtered_out_count": diagnostics.get("filtered_out_count", 0),
+            "rejected_chunks_top10": diagnostics.get("rejected_top", []),
+        }
     elif output_format == "timeline_html":
         payload["timeline_html"] = render_debug_timeline_html(payload)
+    else:
+        payload.pop("diagnostics", None)
     return payload
 
 
