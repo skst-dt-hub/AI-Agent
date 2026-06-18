@@ -175,14 +175,15 @@ def extract_date(content: str, metadata: dict[str, Any], source: str = "") -> st
                 return parsed
 
     search_text = f"{content} {unquote(source)}"
-    match = re.search(r"(20\d{2})[.\-/년 ]\s*(\d{1,2})[.\-/월 ]\s*(\d{1,2})", search_text)
-    if match:
-        return normalize_date("-".join(match.groups()))
+    for match in re.finditer(r"(20\d{2})[.\-/년_ ]\s*(\d{1,2})[.\-/월_ ]\s*(\d{1,2})", search_text):
+        parsed = build_valid_date(match.group(1), match.group(2), match.group(3))
+        if parsed:
+            return parsed
 
-    match = re.search(r"\(?(\d{2})(\d{2})(\d{2})\)?", search_text)
-    if match:
-        yy, mm, dd = match.groups()
-        return f"20{yy}-{mm}-{dd}"
+    for match in re.finditer(r"(?<!\d)\(?(\d{2})(\d{2})(\d{2})\)?(?!\d)", search_text):
+        parsed = build_valid_date(f"20{match.group(1)}", match.group(2), match.group(3))
+        if parsed:
+            return parsed
     return ""
 
 
@@ -195,9 +196,18 @@ def normalize_date(value: str) -> str:
             continue
     match = re.search(r"(20\d{2}).?(\d{1,2}).?(\d{1,2})", value)
     if match:
-        year, month, day = match.groups()
-        return f"{year}-{int(month):02d}-{int(day):02d}"
+        parsed = build_valid_date(match.group(1), match.group(2), match.group(3))
+        if parsed:
+            return parsed
     return ""
+
+
+def build_valid_date(year: str, month: str, day: str) -> str:
+    try:
+        parsed = datetime(int(year), int(month), int(day))
+    except ValueError:
+        return ""
+    return parsed.strftime("%Y-%m-%d")
 
 
 def fallback_title(content: str, source: str, terms: list[str]) -> str:
