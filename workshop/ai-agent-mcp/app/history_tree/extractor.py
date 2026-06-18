@@ -52,17 +52,20 @@ def compose_timeline(
 
 def extract_item(plan: SearchPlan, validated: ValidatedChunk) -> TimelineItem:
     chunk = validated.chunk
-    content = " ".join(chunk.content.split())
-    llm = extract_with_llm(plan, content)
-    title = llm.get("title") or fallback_title(content, chunk.source)
-    summary = llm.get("summary") or summarize(content)
-    details = llm.get("details") if isinstance(llm.get("details"), list) else fallback_details(content)
-    tags = llm.get("tags") if isinstance(llm.get("tags"), list) else fallback_tags(content)
+    content = normalize_space(chunk.content)
+    matched_terms = validated.validation.matched_terms or [plan.primary_keyword, *plan.aliases]
+    focused_content = build_relevant_excerpt(content, matched_terms)
+
+    llm = extract_with_llm(plan, focused_content)
+    title = llm.get("title") or fallback_title(focused_content, chunk.source, matched_terms)
+    summary = llm.get("summary") or summarize(focused_content)
+    details = llm.get("details") if isinstance(llm.get("details"), list) else fallback_details(focused_content)
+    tags = llm.get("tags") if isinstance(llm.get("tags"), list) else fallback_tags(focused_content)
     department = (
         normalize_department_name(str(llm.get("department") or ""))
         or extract_department(content, chunk.metadata, chunk.source)
     )
-    date = llm.get("date") or extract_date(content, chunk.metadata, chunk.source)
+    date = llm.get("date") or extract_date(focused_content, chunk.metadata, chunk.source)
 
     return TimelineItem(
         date=str(date or ""),
@@ -82,25 +85,65 @@ def extract_item(plan: SearchPlan, validated: ValidatedChunk) -> TimelineItem:
             "text_confidence": validated.validation.text_confidence,
             "llm_relevance_score": validated.validation.llm_relevance_score,
             "validation_reason": validated.validation.reason,
+            "focused_excerpt": focused_content[:700],
         },
     )
 
 
-def extract_with_llm(plan: SearchPlan, content: str) -> dict[str, Any]:
+def normalize_space(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def build_relevant_excerpt(content: str, terms: list[str], window: int = 700) -> str:
+    if not content:
+        return ""
+    lowered = content.lower()
+    positions = []
+    for term in terms:
+        term = str(term or "").strip()
+        if not term:
+            continue
+        index = lowered.find(term.lower())
+        if index >= 0:
+            positions.append(index)
+
+    if not positions:
+        return content[: min(len(content), window * 2)]
+
+    center = min(positions)
+    start = max(0, center - window)
+    end = min(len(content), center + window)
+    excerpt = content[start:end].strip()
+
+    # Try to start near a report item marker instead of mid-sentence.
+    marker_positions = [
+        excerpt.rfind("■", 0, min(len(excerpt), window)),
+        excerpt.rfind("□", 0, min(len(excerpt), window)),
+        excerpt.rfind("▶", 0, min(len(excerpt), window)),
+    ]
+    marker = max(marker_positions)
+    if marker > 0:
+        excerpt = excerpt[marker:].strip()
+    return excerpt
+
+
+def extract_with_llm(plan: SearchPlan, focused_content: str) -> dict[str, Any]:
     prompt = (
-        "Extract timeline-card data from this internal report chunk. "
-        "Return strict JSON only. Use Korean if the source is Korean.\n\n"
+        "Extract timeline-card data from this focused report excerpt. "
+        "Use only content directly related to the search keyword and aliases. "
+        "Ignore unrelated neighboring agenda items. Return strict JSON only. "
+        "Use Korean if the source is Korean.\n\n"
         f"Search keyword: {plan.primary_keyword}\n"
         f"Aliases: {plan.aliases}\n"
-        f"Chunk:\n{content[:4500]}\n\n"
+        f"Focused excerpt:\n{focused_content[:3500]}\n\n"
         "Schema:\n"
         "{"
         '"date":"YYYY-MM-DD or empty",'
-        '"title":"large topic title",'
+        '"title":"large topic title, not file name",'
         '"department":"department or empty",'
         '"tags":["short tags"],'
         '"summary":"1-2 sentence summary",'
-        '"details":["bullet detail"]'
+        '"details":["bullet detail directly about the keyword"]'
         "}"
     )
     try:
@@ -157,12 +200,40 @@ def normalize_date(value: str) -> str:
     return ""
 
 
-def fallback_title(content: str, source: str) -> str:
-    for candidate in re.split(r"[\n\r]| {2,}|[|]", content):
+def fallback_title(content: str, source: str, terms: list[str]) -> str:
+    heading = find_heading_near_terms(content, terms)
+    if heading:
+        return heading
+
+    for candidate in split_candidate_phrases(content):
         cleaned = candidate.strip(" -:\t")
-        if 8 <= len(cleaned) <= 90:
+        if 8 <= len(cleaned) <= 90 and not looks_like_noise(cleaned):
             return cleaned
     return source.rsplit("/", 1)[-1] if source else "Related report"
+
+
+def find_heading_near_terms(content: str, terms: list[str]) -> str:
+    sentences = split_candidate_phrases(content)
+    for sentence in sentences:
+        if any(str(term).lower() in sentence.lower() for term in terms if term):
+            heading_match = re.search(r"[■□▶]\s*([^■□▶]{4,80})", sentence)
+            if heading_match:
+                return heading_match.group(1).strip(" -:")
+            return sentence[:90].strip(" -:")
+    return ""
+
+
+def split_candidate_phrases(content: str) -> list[str]:
+    return [
+        part.strip()
+        for part in re.split(r"[;\n\r]|(?=[■□▶])|(?<=다\.)\s+", content)
+        if part.strip()
+    ]
+
+
+def looks_like_noise(text: str) -> bool:
+    lower = text.lower()
+    return lower.endswith((".xlsx", ".pptx", ".pdf")) or len(text) > 90
 
 
 def extract_department(content: str, metadata: dict[str, Any], source: str = "") -> str:
@@ -214,8 +285,8 @@ def summarize(content: str, max_len: int = 220) -> str:
 
 
 def fallback_details(content: str) -> list[str]:
-    parts = [part.strip(" -\t") for part in re.split(r"[;\n\r]|(?<=다\.)\s+", content)]
-    details = [part for part in parts if 12 <= len(part) <= 180]
+    parts = split_candidate_phrases(content)
+    details = [part.strip(" -\t") for part in parts if 12 <= len(part) <= 180]
     if not details and content:
         details = [content[:180].strip()]
     return details[:4]
@@ -223,7 +294,7 @@ def fallback_details(content: str) -> list[str]:
 
 def fallback_tags(content: str) -> list[str]:
     tags = []
-    for token in ("IP", "특허", "R&BD", "TF", "투자", "품질", "공정", "원가", "개발"):
+    for token in ("WMP", "WF6", "NF3", "SiH4", "C4F8", "IP", "특허", "R&BD", "TF", "투자", "품질", "공정", "원가", "개발"):
         if token.lower() in content.lower():
             tags.append(token)
     return tags[:5]
