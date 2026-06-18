@@ -16,11 +16,95 @@ KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID", "")
 REGION = os.getenv("AWS_REGION", "us-east-2")
 MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
-MIN_SCORE = float(os.getenv("MIN_SCORE", ""))
+MIN_SCORE = float(os.getenv("MIN_SCORE", "0") or "0")
+KB_VALIDATION_ENABLED = os.getenv("KB_VALIDATION_ENABLED", "true").lower() == "true"
+KB_VALIDATION_FAIL_OPEN = os.getenv("KB_VALIDATION_FAIL_OPEN", "false").lower() == "true"
 
 bedrock_agent_runtime = boto3.client("bedrock-agent-runtime", region_name=REGION)
 bedrock_runtime = boto3.client("bedrock-runtime", region_name=REGION)
 s3_client = boto3.client("s3", region_name=REGION)
+
+
+def _extract_json_array(text: str) -> list:
+    """Extract the first JSON array from an LLM response."""
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end <= start:
+        raise ValueError("검증 Agent 응답에 JSON 배열이 없습니다.")
+    payload = json.loads(text[start : end + 1])
+    if not isinstance(payload, list):
+        raise ValueError("검증 Agent 응답이 JSON 배열이 아닙니다.")
+    return payload
+
+
+def _validate_retrieval_results(keyword: str, items: list) -> list:
+    """Keep only chunks that directly answer or substantively discuss the query."""
+    if not KB_VALIDATION_ENABLED or not items:
+        return items
+
+    candidates = []
+    for index, item in enumerate(items):
+        location = item.get("location", {})
+        source = (
+            location.get("s3Location", {}).get("uri")
+            or location.get("webLocation", {}).get("url")
+            or str(location)
+        )
+        candidates.append(
+            {
+                "id": index,
+                "source": source,
+                "kb_score": item.get("score"),
+                "content": item.get("content", {}).get("text", "")[:3000],
+            }
+        )
+
+    prompt = f"""사용자 질의와 KB 검색 청크의 직접 관련성을 엄격하게 검증하세요.
+
+사용자 질의: {keyword}
+
+판정 기준:
+- direct: 청크가 질의 대상 자체를 명시적으로 다루며, 답변 근거로 사용할 구체적 내용이 있음
+- partial: 같은 산업/상위 개념/유사 단어만 다루거나 배경 정보 수준임
+- irrelevant: 동명이인, 다른 대상, 단순 키워드 일치, 질의 답변에 도움이 되지 않음
+- KB 점수는 참고하지 말고 질의와 청크 내용만 판정
+- 애매하면 partial 또는 irrelevant로 판정
+
+후보:
+{json.dumps(candidates, ensure_ascii=False)}
+
+각 후보를 빠짐없이 다음 JSON 배열로만 반환하세요.
+[{{"id": 0, "verdict": "direct|partial|irrelevant", "reason": "짧은 판정 근거"}}]
+"""
+
+    try:
+        response = bedrock_runtime.converse(
+            modelId=MODEL_ID,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 2000},
+        )
+        text = response["output"]["message"]["content"][0]["text"]
+        decisions = {
+            int(decision["id"]): decision
+            for decision in _extract_json_array(text)
+            if isinstance(decision, dict) and "id" in decision
+        }
+    except Exception as exc:
+        print(f"[WARN] KB 검증 Agent 실패: {type(exc).__name__}: {exc}")
+        return items if KB_VALIDATION_FAIL_OPEN else []
+
+    validated = []
+    for index, item in enumerate(items):
+        decision = decisions.get(index, {})
+        verdict = str(decision.get("verdict", "irrelevant")).lower()
+        reason = str(decision.get("reason", "검증 결과 없음"))
+        score = item.get("score", 0)
+        source = item.get("location", {}).get("s3Location", {}).get("uri", "")
+        print(f"[VALIDATE] {verdict} | score={score:.3f} | {source.split('/')[-1]} | {reason}")
+        if verdict == "direct":
+            item["_validation"] = {"verdict": verdict, "reason": reason}
+            validated.append(item)
+    return validated
 
 
 # ── URI 파싱 헬퍼 ──────────────────────────────────────────────────────────────
@@ -118,15 +202,21 @@ def run_history_tree_structured(keyword: str) -> list:
         },
     )
 
+    score_filtered = [
+        item
+        for item in response["retrievalResults"]
+        if item.get("score", 0) >= MIN_SCORE
+    ]
+    validated_items = _validate_retrieval_results(keyword, score_filtered)
+
     chunks_by_uri: dict[str, list] = {}
-    for item in response["retrievalResults"]:
+    for item in validated_items:
         uri = item.get("location", {}).get("s3Location", {}).get("uri", "")
         score = item.get("score", 0)
         filename = uri.split("/")[-1] if uri else ""
         date_check = parse_date(uri) if uri else ""
         print(f"[DEBUG] score={score:.3f} | date={date_check or 'FAIL'} | {filename}")
-        if not uri or score < MIN_SCORE:
-            print(f"  → score 필터 제외 (MIN_SCORE={MIN_SCORE})")
+        if not uri:
             continue
         chunks_by_uri.setdefault(uri, []).append({
             "content": item["content"]["text"],
@@ -186,12 +276,20 @@ def search_knowledge_base(keyword: str) -> str:
         },
     )
 
+    score_filtered = [
+        item
+        for item in response["retrievalResults"]
+        if item.get("score", 0) >= MIN_SCORE
+    ]
+    validated_items = _validate_retrieval_results(keyword, score_filtered)
+
     results = []
-    for item in response["retrievalResults"]:
+    for item in validated_items:
         content = item["content"]["text"]
         source = item.get("location", {}).get("s3Location", {}).get("uri", "출처 미확인")
         score = item.get("score", 0)
-        results.append(f"[출처: {source} / 관련도: {score:.2f}]\n{content}")
+        reason = item.get("_validation", {}).get("reason", "")
+        results.append(f"[출처: {source} / KB 점수: {score:.2f} / 검증: {reason}]\n{content}")
 
     return "\n\n---\n\n".join(results) if results else "관련 내용 없음"
 
