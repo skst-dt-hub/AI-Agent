@@ -47,7 +47,8 @@ def validate_evidence(
     return accepted[:limit], diagnostics
 
 
-SIMILARITY_DEDUPE_THRESHOLD = 0.86
+MIN_CONTIGUOUS_DUPLICATE_CHARS = 450
+MIN_CONTIGUOUS_DUPLICATE_RATIO = 0.72
 
 
 def dedupe_chunks(chunks: list[RawChunk]) -> list[RawChunk]:
@@ -72,7 +73,7 @@ def find_duplicate_index(existing_chunks: list[RawChunk], candidate: RawChunk) -
         if normalize_source(existing.source) != candidate_source:
             continue
         existing_text = normalize_for_similarity(existing.content)
-        if chunk_similarity(existing_text, candidate_text) >= SIMILARITY_DEDUPE_THRESHOLD:
+        if has_long_contiguous_overlap(existing_text, candidate_text):
             return index
     return None
 
@@ -87,17 +88,19 @@ def normalize_for_similarity(content: str) -> str:
     return text[:5000]
 
 
-def chunk_similarity(left: str, right: str) -> float:
+def has_long_contiguous_overlap(left: str, right: str) -> bool:
     if not left or not right:
-        return 0.0
-    sequence_score = SequenceMatcher(None, left, right, autojunk=False).ratio()
-    left_tokens = set(left.split())
-    right_tokens = set(right.split())
-    if left_tokens and right_tokens:
-        token_score = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
-    else:
-        token_score = 0.0
-    return max(sequence_score, token_score)
+        return False
+    matcher = SequenceMatcher(None, left, right, autojunk=False)
+    match = matcher.find_longest_match(0, len(left), 0, len(right))
+    shorter_len = min(len(left), len(right))
+    if shorter_len == 0:
+        return False
+    contiguous_ratio = match.size / shorter_len
+    return (
+        match.size >= MIN_CONTIGUOUS_DUPLICATE_CHARS
+        and contiguous_ratio >= MIN_CONTIGUOUS_DUPLICATE_RATIO
+    )
 
 
 def score_value(chunk: RawChunk) -> float:
