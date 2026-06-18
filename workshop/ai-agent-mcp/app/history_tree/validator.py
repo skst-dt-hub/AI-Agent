@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from difflib import SequenceMatcher
 from typing import Any
 
 import boto3
@@ -60,64 +59,16 @@ def validate_evidence(
     return accepted[:limit], diagnostics
 
 
-MIN_CONTIGUOUS_DUPLICATE_CHARS = 450
-MIN_CONTIGUOUS_DUPLICATE_RATIO = 0.72
-
-
 def dedupe_chunks(chunks: list[RawChunk]) -> list[RawChunk]:
-    result: list[RawChunk] = []
+    seen = set()
+    result = []
     for chunk in chunks:
-        duplicate_index = find_duplicate_index(result, chunk)
-        if duplicate_index is not None:
-            if score_value(chunk) > score_value(result[duplicate_index]):
-                result[duplicate_index] = chunk
+        key = (chunk.source, " ".join(chunk.content.split())[:300])
+        if key in seen:
             continue
+        seen.add(key)
         result.append(chunk)
     return result
-
-
-def find_duplicate_index(existing_chunks: list[RawChunk], candidate: RawChunk) -> int | None:
-    candidate_source = normalize_source(candidate.source)
-    candidate_text = normalize_for_similarity(candidate.content)
-    if not candidate_text:
-        return None
-
-    for index, existing in enumerate(existing_chunks):
-        if normalize_source(existing.source) != candidate_source:
-            continue
-        existing_text = normalize_for_similarity(existing.content)
-        if has_long_contiguous_overlap(existing_text, candidate_text):
-            return index
-    return None
-
-
-def normalize_source(source: str) -> str:
-    return str(source or "").replace("\\", "/").strip().lower()
-
-
-def normalize_for_similarity(content: str) -> str:
-    text = re.sub(r"\s+", " ", str(content or "").lower()).strip()
-    text = re.sub(r"[\"'`~!@#$%^&*_=+<>{}\[\]\\|]", "", text)
-    return text[:5000]
-
-
-def has_long_contiguous_overlap(left: str, right: str) -> bool:
-    if not left or not right:
-        return False
-    matcher = SequenceMatcher(None, left, right, autojunk=False)
-    match = matcher.find_longest_match(0, len(left), 0, len(right))
-    shorter_len = min(len(left), len(right))
-    if shorter_len == 0:
-        return False
-    contiguous_ratio = match.size / shorter_len
-    return (
-        match.size >= MIN_CONTIGUOUS_DUPLICATE_CHARS
-        and contiguous_ratio >= MIN_CONTIGUOUS_DUPLICATE_RATIO
-    )
-
-
-def score_value(chunk: RawChunk) -> float:
-    return float(chunk.kb_score or 0.0)
 
 
 def debug_chunk(item: ValidatedChunk) -> dict[str, Any]:
