@@ -7,7 +7,7 @@ __pycache__/
 
 # 보안
 .env
-_Setting/SuyeonKim_accessKeys.csv
+_Setting/*.csv
 
 # 바이너리/아카이브
 *.msi
@@ -27,3 +27,5 @@ output/
 desktop.ini
 Thumbs.db
 .DS_Store
+
+/workshop
