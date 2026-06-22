@@ -56,16 +56,24 @@ def extract_item(plan: SearchPlan, validated: ValidatedChunk) -> TimelineItem:
     matched_terms = validated.validation.matched_terms or [plan.primary_keyword, *plan.aliases]
     focused_content = build_relevant_excerpt(content, matched_terms)
 
-    llm = extract_with_llm(plan, focused_content)
+    llm = extract_with_llm(
+        plan=plan,
+        focused_content=focused_content,
+        full_content=content,
+        metadata=chunk.metadata,
+        source=chunk.source,
+    )
     title = llm.get("title") or fallback_title(focused_content, chunk.source, matched_terms)
     summary = llm.get("summary") or summarize(focused_content)
     details = llm.get("details") if isinstance(llm.get("details"), list) else fallback_details(focused_content)
     tags = llm.get("tags") if isinstance(llm.get("tags"), list) else fallback_tags(focused_content)
-    department = (
-        normalize_department_name(str(llm.get("department") or ""))
-        or extract_department(content, chunk.metadata, chunk.source)
+    department = extract_department(
+        content=content,
+        metadata=chunk.metadata,
+        source=chunk.source,
+        llm_department=str(llm.get("department") or ""),
     )
-    date = llm.get("date") or extract_date(focused_content, chunk.metadata, chunk.source)
+    date = normalize_date(str(llm.get("date") or "")) or extract_date(content, chunk.metadata, chunk.source)
 
     return TimelineItem(
         date=str(date or ""),
@@ -115,7 +123,6 @@ def build_relevant_excerpt(content: str, terms: list[str], window: int = 700) ->
     end = min(len(content), center + window)
     excerpt = content[start:end].strip()
 
-    # Try to start near a report item marker instead of mid-sentence.
     marker_positions = [
         excerpt.rfind("■", 0, min(len(excerpt), window)),
         excerpt.rfind("□", 0, min(len(excerpt), window)),
@@ -127,15 +134,25 @@ def build_relevant_excerpt(content: str, terms: list[str], window: int = 700) ->
     return excerpt
 
 
-def extract_with_llm(plan: SearchPlan, focused_content: str) -> dict[str, Any]:
+def extract_with_llm(
+    plan: SearchPlan,
+    focused_content: str,
+    full_content: str,
+    metadata: dict[str, Any],
+    source: str,
+) -> dict[str, Any]:
     prompt = (
-        "Extract timeline-card data from this focused report excerpt. "
-        "Use only content directly related to the search keyword and aliases. "
+        "Extract timeline-card data from this internal report evidence. "
+        "Use the focused excerpt for title, summary, details, and tags. "
+        "Use source, metadata, and full context only to infer date or department. "
         "Ignore unrelated neighboring agenda items. Return strict JSON only. "
         "Use Korean if the source is Korean.\n\n"
         f"Search keyword: {plan.primary_keyword}\n"
         f"Aliases: {plan.aliases}\n"
+        f"Source: {source}\n"
+        f"Metadata: {json.dumps(metadata, ensure_ascii=False)[:1200]}\n"
         f"Focused excerpt:\n{focused_content[:3500]}\n\n"
+        f"Full context head:\n{full_content[:1200]}\n\n"
         "Schema:\n"
         "{"
         '"date":"YYYY-MM-DD or empty",'
@@ -246,15 +263,24 @@ def looks_like_noise(text: str) -> bool:
     return lower.endswith((".xlsx", ".pptx", ".pdf")) or len(text) > 90
 
 
-def extract_department(content: str, metadata: dict[str, Any], source: str = "") -> str:
+def extract_department(
+    content: str,
+    metadata: dict[str, Any],
+    source: str = "",
+    llm_department: str = "",
+) -> str:
+    source_department = extract_department_from_source(source)
+    if source_department:
+        return source_department
+
     for key in ("department", "dept", "org", "organization"):
         if metadata.get(key):
             mapped = normalize_department_name(str(metadata[key]))
             return mapped or str(metadata[key])
 
-    source_department = extract_department_from_source(source)
-    if source_department:
-        return source_department
+    mapped_llm_department = normalize_department_name(llm_department)
+    if mapped_llm_department:
+        return mapped_llm_department
 
     match = re.search(r"([가-힣A-Za-z& ]{2,20}(본부|팀|실|센터|그룹|부문))", content)
     if match:
@@ -304,7 +330,7 @@ def fallback_details(content: str) -> list[str]:
 
 def fallback_tags(content: str) -> list[str]:
     tags = []
-    for token in ("WMP", "WF6", "NF3", "SiH4", "C4F8", "IP", "특허", "R&BD", "TF", "투자", "품질", "공정", "원가", "개발"):
+    for token in ("IP", "특허", "R&BD", "TF", "투자", "품질", "공정", "원가", "개발"):
         if token.lower() in content.lower():
             tags.append(token)
     return tags[:5]
