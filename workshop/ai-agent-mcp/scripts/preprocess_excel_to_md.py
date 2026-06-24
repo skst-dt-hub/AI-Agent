@@ -23,8 +23,10 @@ def main() -> int:
     parser.add_argument("--input", required=True, help="Input xlsx file or directory.")
     parser.add_argument("--output", required=True, help="Output directory for generated Markdown.")
     parser.add_argument("--include-hidden", action="store_true", help="Include hidden and veryHidden sheets.")
-    parser.add_argument("--max-block-rows", type=int, default=80, help="Maximum non-empty rows per Markdown block.")
+    parser.add_argument("--max-block-rows", type=int, default=6, help="Maximum non-empty rows per Markdown block.")
     parser.add_argument("--blank-break", type=int, default=2, help="Split a block after this many blank rows.")
+    parser.add_argument("--overlap-rows", type=int, default=2, help="Rows to overlap when splitting large blocks.")
+    parser.add_argument("--max-block-chars", type=int, default=4000, help="Approximate maximum text characters per Markdown block.")
     parser.add_argument(
         "--ascii-names",
         action="store_true",
@@ -60,6 +62,8 @@ def main() -> int:
                 include_hidden=args.include_hidden,
                 max_block_rows=args.max_block_rows,
                 blank_break=args.blank_break,
+                overlap_rows=args.overlap_rows,
+                max_block_chars=args.max_block_chars,
                 ascii_names=args.ascii_names,
                 group_by_source=args.group_by_source,
             )
@@ -96,6 +100,8 @@ def convert_workbook(
     include_hidden: bool,
     max_block_rows: int,
     blank_break: int,
+    overlap_rows: int,
+    max_block_chars: int,
     ascii_names: bool,
     group_by_source: bool,
 ) -> list[dict[str, Any]]:
@@ -121,7 +127,7 @@ def convert_workbook(
                 continue
 
             rows = extract_rows(sheet)
-            blocks = split_rows(rows, max_block_rows=max_block_rows, blank_break=blank_break)
+            blocks = split_rows(rows, max_block_rows=max_block_rows, blank_break=blank_break, overlap_rows=overlap_rows, max_block_chars=max_block_chars)
             for block_index, block in enumerate(blocks, start=1):
                 row_start = block[0]["row"]
                 row_end = block[-1]["row"]
@@ -227,27 +233,51 @@ def build_merged_value_map(sheet: Any) -> dict[str, Any]:
     return values
 
 
-def split_rows(rows: list[dict[str, Any]], max_block_rows: int, blank_break: int) -> list[list[dict[str, Any]]]:
+def split_rows(
+    rows: list[dict[str, Any]],
+    max_block_rows: int,
+    blank_break: int,
+    overlap_rows: int,
+    max_block_chars: int,
+) -> list[list[dict[str, Any]]]:
     if not rows:
         return []
 
     blocks: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
+    current_chars = 0
     previous_row: int | None = None
+    overlap_rows = max(0, overlap_rows)
+
     for row in rows:
         gap = 0 if previous_row is None else row["row"] - previous_row - 1
-        should_split = bool(current) and (
+        row_chars = estimate_row_chars(row)
+        split_for_gap = bool(current) and gap >= blank_break
+        split_for_size = bool(current) and (
             len(current) >= max_block_rows
-            or gap >= blank_break
+            or current_chars + row_chars > max_block_chars
         )
-        if should_split:
+
+        if split_for_gap or split_for_size:
             blocks.append(current)
-            current = []
+            if split_for_size and overlap_rows:
+                current = current[-overlap_rows:]
+                current_chars = sum(estimate_row_chars(item) for item in current)
+            else:
+                current = []
+                current_chars = 0
+
         current.append(row)
+        current_chars += row_chars
         previous_row = row["row"]
+
     if current:
         blocks.append(current)
     return blocks
+
+
+def estimate_row_chars(row: dict[str, Any]) -> int:
+    return sum(len(cell["value"]) + len(cell["cell"]) + 4 for cell in row["cells"]) + 120
 
 
 def render_markdown(
@@ -355,6 +385,9 @@ def count_term(output_dir: Path, term: str) -> int:
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     raise SystemExit(main())
+
+
+
 
 
 
